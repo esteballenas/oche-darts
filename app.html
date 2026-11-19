@@ -268,7 +268,9 @@ input{font:inherit;color:var(--fg)}
 .camov{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 .campill{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;border-radius:999px;padding:7px 16px;font-weight:600;font-size:14px;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .camwrap.noc .campill{white-space:normal;text-align:center;bottom:auto;top:50%;transform:translate(-50%,-50%);border-radius:12px;width:86%;line-height:1.4;font-weight:500}
-.camwrap.noc .camalign{display:none}
+.camwrap.noc .camloupe{position:absolute;width:120px;height:120px;pointer-events:none;z-index:3;filter:drop-shadow(0 4px 12px rgba(0,0,0,.6))}
+.camtips .row{display:flex;gap:8px}
+.camalign{display:none}
 .camalign{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.65);color:#fff;border-radius:8px;padding:7px 12px;font-weight:600;font-size:14px}
 .camzoom{position:absolute;right:16px;top:50%;transform:translateY(-50%);writing-mode:vertical-lr;direction:rtl;height:180px;width:28px;accent-color:var(--accent)}
 .camwrap.full{position:fixed;inset:0;z-index:45;background:var(--bg);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);max-width:560px;margin:0 auto}
@@ -847,6 +849,7 @@ function throwDart(d,fromBot){
   const g=S.game; if(!g||g.done||g.pause||S.sheet) return;
   if(isBot(g,g.cur)!==!!fromBot) return;
   S.disp=null; pushUndo(); if(!fromBot) buzz(12);
+  if(S.input==='cam'&&!fromBot&&!d.cam)CAM.count=Math.min(3,CAM.count+1);
   const p=g.cur; g.turn.push(d); sfx.hit(d);
   if(!fromBot){const hm=g.st[p].hm||(g.st[p].hm={}),k=hmKey(d);hm[k]=(hm[k]||0)+1}
   const res=MODES[g.mode].dart(g,p,d);
@@ -911,7 +914,7 @@ const CAL_BOARD=[[0,-170],[170,0],[0,170],[-170,0]];
 const CAL_NAMES=['der 20 (oben)','der 6 (rechts)','der 3 (unten)','der 11 (links)'];
 const CAM={stream:null,el:null,video:null,ov:null,proc:null,pctx:null,W:320,H:240,Hib:null,Hbi:null,mask:null,maskN:0,
   ref:null,empty:null,prev:null,lastMotion:0,bigSince:0,count:0,timer:null,status:'',calib:store.get('calib',null),
-  calibrating:false,pts:[],drag:-1,err:'',zoomCap:null,zoom:1,last:null,dir:store.get('camdir',null)};
+  calibrating:false,pts:[],drag:-1,err:'',zoomCap:null,zoom:1,last:null,T:30,cand:null,dartMask:null,emptyT:0,dir:store.get('camdir',null)};
 function solveH(src,dst){
   const A=[],b=[];
   for(let i=0;i<4;i++){const [x,y]=src[i],[u,v]=dst[i];A.push([x,y,1,0,0,0,-u*x,-u*y]);b.push(u);A.push([0,0,0,x,y,1,-v*x,-v*y]);b.push(v)}
@@ -977,13 +980,15 @@ function camGray(){
   for(let i=0,j=0,k=0;i<g.length;i++,j+=4,k+=3){g[i]=(d[j]*77+d[j+1]*150+d[j+2]*29)>>8;c[k]=d[j];c[k+1]=d[j+1];c[k+2]=d[j+2]}
   return {g,c};
 }
-function camDiff(a,b,T,out){
-  const m=CAM.mask,A=a.c,B=b.c;let n=0;
-  for(let i=0,k=0;i<m.length;i++,k+=3){if(!m[i]){if(out)out[i]=0;continue}
-    const d=Math.max(Math.abs(A[k]-B[k]),Math.abs(A[k+1]-B[k+1]),Math.abs(A[k+2]-B[k+2])),on=d>T;if(out)out[i]=on?1:0;if(on)n++}
+// Helligkeitsausgleich: Ringlicht-Flackern oder die Belichtungsautomatik verschieben das ganze Bild heller/dunkler
+function camOffset(a,b){const m=CAM.mask,A=a.g,B=b.g;let s=0,n=0;for(let i=0;i<A.length;i+=3){if(m[i]){s+=A[i]-B[i];n++}}return n?s/n:0}
+function camDiff(a,b,T,out,only){
+  const m=CAM.mask,A=a.c,B=b.c,off=camOffset(a,b);let n=0;
+  for(let i=0,k=0;i<m.length;i++,k+=3){if(!m[i]||(only&&!only[i])){if(out)out[i]=0;continue}
+    const d=Math.max(Math.abs(A[k]-B[k]-off),Math.abs(A[k+1]-B[k+1]-off),Math.abs(A[k+2]-B[k+2]-off)),on=d>T;if(out)out[i]=on?1:0;if(on)n++}
   return n;
 }
-function camMotion(a,b){const m=CAM.mask,A=a.g,B=b.g;let s=0,n=0;for(let i=0;i<A.length;i+=2){if(m[i]){s+=Math.abs(A[i]-B[i]);n++}}return n?s/n:0}
+function camMotion(a,b){const m=CAM.mask,A=a.g,B=b.g,off=camOffset(a,b);let s=0,n=0;for(let i=0;i<A.length;i+=2){if(m[i]){s+=Math.abs(A[i]-B[i]-off);n++}}return n?s/n:0}
 // Größter zusammenhängender Fleck, dann Hauptachse; das schmalere Ende ist die Spitze
 const NB=[];for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)if(dx||dy)NB.push([dx,dy]);
 function camFindTip(bits){
@@ -996,8 +1001,10 @@ function camFindTip(bits){
     if(!best||px.length>best.length)best=px;
   }
   if(!best||best.length<10)return null;
-  let mx=0,my=0;for(const k of best){mx+=k%W;my+=(k/W)|0}mx/=best.length;my/=best.length;
+  const N=best.length;let mx=0,my=0;for(const k of best){mx+=k%W;my+=(k/W)|0}mx/=N;my/=N;
   let sxx=0,syy=0,sxy=0;for(const k of best){const dx=k%W-mx,dy=((k/W)|0)-my;sxx+=dx*dx;syy+=dy*dy;sxy+=dx*dy}
+  sxx/=N;syy/=N;sxy/=N;
+  const tr=(sxx+syy)/2,dt=Math.sqrt(((sxx-syy)/2)**2+sxy*sxy),l1=tr+dt,l2=Math.max(.3,tr-dt),elong=Math.sqrt(l1/l2);
   const th=.5*Math.atan2(2*sxy,sxx-syy),c=Math.cos(th),s=Math.sin(th);
   let tmin=1e9,tmax=-1e9;const ts=best.map(k=>{const t=(k%W-mx)*c+(((k/W)|0)-my)*s;if(t<tmin)tmin=t;if(t>tmax)tmax=t;return t});
   const L=tmax-tmin||1;let nMin=0,nMax=0;for(const t of ts){if(t<tmin+L*.25)nMin++;else if(t>tmax-L*.25)nMax++}
@@ -1011,12 +1018,18 @@ function camFindTip(bits){
   best.forEach((k,i)=>{if(Math.abs(ts[i]-edge)<=Math.max(1.5,L*.04)){tx+=k%W;ty+=(k/W)|0;tn++}});
   // Die dünne Stahlspitze ist im Bild kaum sichtbar: ein Stück Richtung Spitze nachschieben
   const tdx=tipAtMin?-c:c,tdy=tipAtMin?-s:s,corr=Math.min(3,L*.06);
-  return {x:tx/tn+.5+tdx*corr,y:ty/tn+.5+tdy*corr,area:best.length,len:L};
+  return {x:tx/tn+.5+tdx*corr,y:ty/tn+.5+tdy*corr,area:N,len:L,elong,px:best};
 }
 function camLoop(restart){
   if(restart){clearInterval(CAM.timer);CAM.timer=null}
   if(CAM.timer)return;
   CAM.timer=setInterval(camTick,110);
+}
+// Nach "Weiter" oder neuem Ausrichten: Zustand neu aufbauen, das nächste ruhige Bild gilt als leere Scheibe
+function camResync(){CAM.count=0;CAM.ref=null;CAM.empty=null;CAM.dartMask=null;CAM.cand=null;CAM.bigSince=0}
+function camAddDartMask(px){
+  const {W,H}=CAM;if(!CAM.dartMask)CAM.dartMask=new Uint8Array(W*H);
+  for(const k of px)CAM.dartMask[k]=1;
 }
 function camTick(){
   const v=CAM.video;
@@ -1024,24 +1037,43 @@ function camTick(){
   if(!document.body.contains(v)){camStop();return}
   camDrawOverlay();
   if(!CAM.mask||CAM.calibrating){camSetStatus(CAM.mask?'':'Bitte zuerst ausrichten');return}
-  const g=camGray(),now=performance.now();
+  const g=camGray(),now=performance.now(),T=CAM.T;
   if(!CAM.prev){CAM.prev=g;CAM.lastMotion=now;return}
-  const mot=camMotion(g,CAM.prev);CAM.prev=g;
-  if(mot>5){CAM.lastMotion=now;camSetStatus('Bewegung …');return}
+  const mot=camMotion(g,CAM.prev),prev=CAM.prev;CAM.prev=g;
+  if(mot>6){CAM.lastMotion=now;CAM.cand=null;camSetStatus('Bewegung …');return}
   if(now-CAM.lastMotion<380)return;
-  if(!CAM.empty){CAM.empty=g;CAM.ref=g;camSetStatus('Bereit, wirf!');return}
-  const bits=new Uint8Array(g.g.length),n=camDiff(g,CAM.ref,30,bits),minA=12,maxA=Math.max(400,CAM.maskN*.06);
-  if(n<minA){camSetStatus(CAM.count>=3?'Darts ziehen':'Bereit, wirf!');return}
-  // Darts gezogen? Dann sieht das Bild wieder aus wie die leere Scheibe.
-  if(CAM.count>0&&camDiff(g,CAM.empty,30)<Math.max(minA*3,CAM.maskN*.004)){camRemoved(g);return}
+  // Bildrauschen messen und die Schwelle anpassen (ruhiges Bild gegen das vorige)
+  const noise=camDiff(g,prev,T);
+  if(noise>CAM.maskN*.002)CAM.T=Math.min(70,T+3);else if(noise<CAM.maskN*.0003&&T>28)CAM.T=T-1;
+  if(!CAM.empty){CAM.empty=g;CAM.ref=g;CAM.emptyT=now;camSetStatus('Bereit, wirf!');return}
+  if(!CAM.ref)CAM.ref=g;
+  const bits=new Uint8Array(g.g.length),n=camDiff(g,CAM.ref,T,bits),minA=12,maxA=Math.max(400,CAM.maskN*.06);
+  if(n<minA){
+    CAM.cand=null;
+    // Leere Scheibe langsam nachführen, damit Lichtänderungen nicht stören
+    if(CAM.count===0&&now-(CAM.emptyT||0)>3000){CAM.empty=g;CAM.ref=g;CAM.emptyT=now}
+    camSetStatus(CAM.count>=3?'Darts ziehen':'Bereit, wirf!');return;
+  }
+  // Darts gezogen? Dort, wo Darts steckten, sieht es wieder aus wie die leere Scheibe.
+  if(CAM.count>0&&CAM.dartMask){
+    let tot=0;for(let i=0;i<CAM.dartMask.length;i++)if(CAM.dartMask[i]&&CAM.mask[i])tot++;
+    const ch=camDiff(g,CAM.empty,T,null,CAM.dartMask);
+    if(tot>0&&ch/tot<.3){camRemoved(g);return}
+  }
   if(n>maxA){
+    CAM.cand=null;
     if(!CAM.bigSince)CAM.bigSince=now;
     if(now-CAM.bigSince>2500){CAM.ref=g;CAM.bigSince=0}
     camSetStatus('Bild hat sich stark verändert');return;
   }
   CAM.bigSince=0;
-  const tip=camFindTip(bits);CAM.ref=g;
-  if(!tip)return;
+  const tip=camFindTip(bits);
+  // Nur länglich geformte Flecken sind Darts; alles andere (Lichtflecken, Rauschen) wird ins Referenzbild übernommen
+  if(!tip||tip.len<10||tip.elong<2.2){CAM.ref=g;CAM.cand=null;return}
+  // Der Fleck muss in zwei ruhigen Bildern hintereinander an derselben Stelle sein
+  if(!CAM.cand||Math.hypot(CAM.cand.x-tip.x,CAM.cand.y-tip.y)>5){CAM.cand={x:tip.x,y:tip.y,t:now};return}
+  if(now-CAM.cand.t<250)return;
+  CAM.cand=null;CAM.ref=g;camAddDartMask(tip.px);
   const [bx,by]=hApply(CAM.Hib,tip.x,tip.y);
   CAM.last={x:tip.x,y:tip.y,t:now};
   camDart(bx,by);
@@ -1055,7 +1087,7 @@ function camDart(bx,by){
   camSetStatus(CAM.count>=3?'Darts ziehen':'Bereit, wirf!');
 }
 function camRemoved(g){
-  CAM.ref=g;CAM.empty=g;const had=CAM.count;CAM.count=0;camSetStatus('Bereit, wirf!');
+  CAM.ref=g;CAM.empty=g;CAM.emptyT=performance.now();CAM.dartMask=null;const had=CAM.count;CAM.count=0;camSetStatus('Bereit, wirf!');
   const gm=S.game;if(!gm||gm.done||gm.pause||S.sheet)return;
   if(gm.turn.length&&!isBot(gm,gm.cur)) endTurnEarly();
   else if(had&&dispOn()){S.disp=null;render()}
@@ -1088,11 +1120,11 @@ function camEnsureEl(){
   if(CAM.el)return CAM.el;
   const el=document.createElement('div');el.className='camwrap';
   el.innerHTML=`<div class="camhead"><b>Gerät ausrichten</b><button class="camdone" data-act="calibdone">Fertig</button></div>
-    <div class="camstage"><video playsinline muted autoplay></video><canvas class="camov"></canvas>
+    <div class="camstage"><video playsinline muted autoplay></video><canvas class="camov"></canvas><canvas class="camloupe" width="240" height="240" hidden></canvas>
       <input class="camzoom" type="range" min="1" max="3" step="0.1" value="1" aria-label="Zoom" hidden>
       <div class="campill">Kamera startet …</div>
       <button class="camalign" data-act="calib">Ausrichten</button></div>
-    <div class="camtips"><p class="camstep"></p><div class="row"><button class="btn2" data-act="calibreset">Punkte neu setzen</button></div>
+    <div class="camtips"><p class="camstep"></p><div class="row"><button class="btn2" data-act="calibundo">Letzten Punkt zurück</button><button class="btn2" data-act="calibreset">Alle neu setzen</button></div>
       <h3>Tipps für bessere Genauigkeit</h3>
       <div class="tip"><i>☀</i><div><b>Beleuchtung</b><span>Ein Ringlicht hilft am meisten. Schatten vermeiden und Vorhänge schließen.</span></div></div>
       <div class="tip"><i>▣</i><div><b>Gerät ruhig halten</b><span>Ein Stativ oder eine Handyhalterung verwenden. Nach dem Ausrichten das Handy nicht mehr bewegen.</span></div></div>
@@ -1106,11 +1138,26 @@ function camEnsureEl(){
     const [u,v]=pos(e),r=camRect();
     const hit=CAM.pts.findIndex(([a,b])=>Math.hypot((a-u)*r.w,(b-v)*r.h)<26);
     if(hit>=0)CAM.drag=hit;else if(CAM.pts.length<4){CAM.pts.push([u,v]);CAM.drag=CAM.pts.length-1}
-    try{CAM.ov.setPointerCapture(e.pointerId)}catch(_){}camCalibText();e.preventDefault();
+    try{CAM.ov.setPointerCapture(e.pointerId)}catch(_){}if(CAM.drag>=0)camLoupe(CAM.pts[CAM.drag]);camCalibText();e.preventDefault();
   });
-  CAM.ov.addEventListener('pointermove',e=>{if(CAM.calibrating&&CAM.drag>=0){CAM.pts[CAM.drag]=pos(e)}});
-  CAM.ov.addEventListener('pointerup',()=>{CAM.drag=-1;camCalibText()});
+  CAM.ov.addEventListener('pointermove',e=>{if(CAM.calibrating&&CAM.drag>=0){CAM.pts[CAM.drag]=pos(e);camLoupe(CAM.pts[CAM.drag])}});
+  CAM.ov.addEventListener('pointerup',()=>{CAM.drag=-1;camLoupe(null);camCalibText()});
+  CAM.ov.addEventListener('pointercancel',()=>{CAM.drag=-1;camLoupe(null)});
   return el;
+}
+// Lupe beim Setzen eines Punkts: 4-fach vergrößerter Ausschnitt mit Fadenkreuz über dem Finger
+function camLoupe(p){
+  const lp=CAM.el&&CAM.el.querySelector('.camloupe');if(!lp)return;
+  if(!p){lp.hidden=true;return}
+  const v=CAM.video,r=camRect(),box=r.box,S2=120,Z=4,vw=v.videoWidth,vh=v.videoHeight;
+  const sw=S2/Z/r.w*vw,sh=S2/Z/r.h*vh,c=lp.getContext('2d');
+  c.clearRect(0,0,240,240);c.save();c.beginPath();c.arc(120,120,118,0,7);c.clip();
+  c.fillStyle='#000';c.fillRect(0,0,240,240);
+  try{c.drawImage(v,p[0]*vw-sw/2,p[1]*vh-sh/2,sw,sh,0,0,240,240)}catch(e){}
+  c.restore();c.strokeStyle='#7fe0ff';c.lineWidth=3;c.beginPath();c.arc(120,120,117,0,7);c.stroke();
+  c.strokeStyle='#ff3b5c';c.lineWidth=2;c.beginPath();c.moveTo(120,88);c.lineTo(120,112);c.moveTo(120,128);c.lineTo(120,152);c.moveTo(88,120);c.lineTo(112,120);c.moveTo(128,120);c.lineTo(152,120);c.stroke();
+  const x=r.x-box.left+p[0]*r.w,y=r.y-box.top+p[1]*r.h;
+  lp.style.left=Math.max(4,Math.min(box.width-124,x-60))+'px';lp.style.top=(y-150>4?y-150:y+30)+'px';lp.hidden=false;
 }
 function camCalibText(){
   if(!CAM.el)return;const st=CAM.el.querySelector('.camstep'),n=CAM.pts.length;
@@ -1124,7 +1171,7 @@ function camOpenCalib(){
   camCalibText();
 }
 function camCloseCalib(save){
-  if(save&&CAM.pts.length===4){CAM.calib={pts:CAM.pts,zoom:CAM.zoom};store.set('calib',CAM.calib);camSetupCalib();CAM.count=0;CAM.dir=null;store.set('camdir',null)}
+  if(save&&CAM.pts.length===4){CAM.calib={pts:CAM.pts,zoom:CAM.zoom};store.set('calib',CAM.calib);camSetupCalib();camResync();CAM.dir=null;store.set('camdir',null)}
   CAM.calibrating=false;if(CAM.el)CAM.el.classList.remove('full');camSetStatus(CAM.mask?'Leere Scheibe wird gemerkt …':'Bitte zuerst ausrichten');
 }
 async function mountCam(area){
@@ -1481,19 +1528,20 @@ const ACT={
   outs:()=>{S.sheet='outs';render()},
   skin:d=>{P.skin=d.v;savePrefs();applySkin();render()},
   voicetest:()=>{const pv=P.voice;P.voice=true;say('Hundertvierzig. Rest: einhunderteinundsechzig');P.voice=pv},
-  weiter:()=>{if(dispOn()){S.disp=null;render()}else endTurnEarly()},
+  weiter:()=>{if(S.input==='cam')camResync();if(dispOn()){S.disp=null;render()}else endTurnEarly()},
   pref:d=>{P[d.k]=!P[d.k];savePrefs();if(d.k==='sound'&&P.sound){ac();tone(880,0,.12,'sine',.1)}if(d.k==='voice'){if(P.voice)say('Ansage an');else try{speechSynthesis.cancel()}catch(e){}}render()},
   closesheet:()=>{S.sheet=null;render()},
   home:()=>leaveGame(false),
   askabandon:()=>{S.confirmAbandon=true;render()},
   abandon:()=>leaveGame(true),
-  undo:()=>undo(),
+  undo:()=>{if(S.input==='cam'&&CAM.count>0)CAM.count--;undo()},
   endturn:()=>endTurnEarly(),
   toggleInput:()=>{if(S.input==='cam')camStop();S.input=S.input==='board'?'keys':'board';store.set('input',S.input);render()},
   camtoggle:()=>{if(S.input==='cam'){camStop();S.input='board'}else{S.input='cam';CAM.count=0;CAM.ref=CAM.empty=CAM.prev=null}store.set('input',S.input);render()},
   calib:()=>camOpenCalib(),
   calibdone:()=>camCloseCalib(true),
   calibreset:()=>{CAM.pts=[];camCalibText()},
+  calibundo:()=>{CAM.pts.pop();camCalibText()},
   mod:d=>{S.mod=+d.v;render()},
   key:d=>{const n=+d.n;let dart;if(n===0)dart={seg:0,mult:1};else if(n===50)dart={seg:25,mult:2};else if(n===25)dart={seg:25,mult:1};else dart={seg:n,mult:S.mod};
     // Position für die Darstellung auf der Scheibe: Feldmitte mit etwas Streuung

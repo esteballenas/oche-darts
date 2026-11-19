@@ -1,5 +1,5 @@
 // Offline-Speicher für die installierte App. Bei jeder neuen Version VERSION hochzählen (macht build.py automatisch).
-const VERSION = 'oche-537dcc8817';
+const VERSION = 'oche-c59d058e8b';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
