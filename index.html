@@ -266,12 +266,13 @@ input{font:inherit;color:var(--fg)}
 .camstage{position:relative;flex:1;min-height:0;background:#000;border-radius:18px;overflow:hidden}
 .camstage video{width:100%;height:100%;object-fit:contain;display:block}
 .camov{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
-.campill{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;border-radius:999px;padding:7px 16px;font-weight:600;font-size:14px;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.campill{z-index:4;position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;border-radius:999px;padding:7px 16px;font-weight:600;font-size:14px;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .camwrap.noc .campill{white-space:normal;text-align:center;bottom:auto;top:50%;transform:translate(-50%,-50%);border-radius:12px;width:86%;line-height:1.4;font-weight:500}
 .camwrap.noc .camloupe{position:absolute;width:120px;height:120px;pointer-events:none;z-index:3;filter:drop-shadow(0 4px 12px rgba(0,0,0,.6))}
 .camtips .row{display:flex;gap:8px}
 .camalign{display:none}
-.camalign{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.65);color:#fff;border-radius:8px;padding:7px 12px;font-weight:600;font-size:14px}
+.camdbg{position:absolute;left:8px;top:8px;right:110px;color:#cfe8ff;font-size:11px;text-shadow:0 1px 2px #000;pointer-events:none;z-index:4}
+.camalign{position:absolute;z-index:5;top:10px;right:10px;background:rgba(0,0,0,.65);color:#fff;border-radius:8px;padding:7px 12px;font-weight:600;font-size:14px}
 .camzoom{position:absolute;right:16px;top:50%;transform:translateY(-50%);writing-mode:vertical-lr;direction:rtl;height:180px;width:28px;accent-color:var(--accent)}
 .camwrap.full{position:fixed;inset:0;z-index:45;background:var(--bg);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);max-width:560px;margin:0 auto}
 .camwrap.full .camhead{display:flex;align-items:center;justify-content:center;position:relative;padding:14px 16px}
@@ -849,7 +850,6 @@ function throwDart(d,fromBot){
   const g=S.game; if(!g||g.done||g.pause||S.sheet) return;
   if(isBot(g,g.cur)!==!!fromBot) return;
   S.disp=null; pushUndo(); if(!fromBot) buzz(12);
-  if(S.input==='cam'&&!fromBot&&!d.cam)CAM.count=Math.min(3,CAM.count+1);
   const p=g.cur; g.turn.push(d); sfx.hit(d);
   if(!fromBot){const hm=g.st[p].hm||(g.st[p].hm={}),k=hmKey(d);hm[k]=(hm[k]||0)+1}
   const res=MODES[g.mode].dart(g,p,d);
@@ -868,7 +868,8 @@ function endTurn(g,res){
   const total=M.turnTotal(g,p,turn);
   const out=M.turnEnd(g,p,res,turn);
   // Aufnahme kurz stehen lassen, wie bei Autodarts
-  S.disp={p,turn,total:res==='bust'?'BUST':total,txt:out.txt,bust:res==='bust',until:Date.now()+(isBot(g,p)?1500:1800)};
+  const pull=S.input==='cam'&&!!CAM.mask&&!isBot(g,p)&&res!=='leg'&&CAM.count>0;
+  S.disp={p,turn,total:res==='bust'?'BUST':total,txt:out.txt,bust:res==='bust',pull,until:pull?Infinity:Date.now()+(isBot(g,p)?1500:1800)};
   g.last[p]={d:turn.map(lab),txt:out.txt};
   g.turn=[];
   if(out.flash) flash(...out.flash);
@@ -899,7 +900,7 @@ let botT=null;
 function scheduleBot(){
   clearTimeout(botT);
   const g=S.game;
-  if(S.view!=='game'||!g||g.done||g.pause||S.sheet||!isBot(g,g.cur)) return;
+  if(S.view!=='game'||!g||g.done||g.pause||S.sheet||!isBot(g,g.cur)||(S.disp&&S.disp.pull&&dispOn())) return;
   botT=setTimeout(()=>{
     const g2=S.game;if(!g2||!isBot(g2,g2.cur)||g2.done||g2.pause||S.sheet)return;
     throwDart(botThrow(g2.bots[g2.cur],MODES[g2.mode].aim(g2,g2.cur)),true);
@@ -924,6 +925,7 @@ function solveH(src,dst){
 }
 const hApply=(H,x,y)=>{const w=H[6]*x+H[7]*y+H[8];return [(H[0]*x+H[1]*y+H[2])/w,(H[3]*x+H[4]*y+H[5])/w]};
 const camSupported=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+function camDebug(){const d=CAM.el&&CAM.el.querySelector('.camdbg');if(d)d.textContent=`Bewegung ${(CAM.mot||0).toFixed(1)} % · Schwelle ${CAM.T} · Darts in der Scheibe ${CAM.count}`}
 function camSetStatus(t){CAM.status=t;const p=CAM.el&&CAM.el.querySelector('.campill');if(p)p.textContent=t}
 async function camStart(){
   if(CAM.stream) return true;
@@ -981,14 +983,27 @@ function camGray(){
   return {g,c};
 }
 // Helligkeitsausgleich: Ringlicht-Flackern oder die Belichtungsautomatik verschieben das ganze Bild heller/dunkler
-function camOffset(a,b){const m=CAM.mask,A=a.g,B=b.g;let s=0,n=0;for(let i=0;i<A.length;i+=3){if(m[i]){s+=A[i]-B[i];n++}}return n?s/n:0}
+// Flimmern der Raumbeleuchtung erzeugt wandernde helle/dunkle Streifen. Ausgleich: mittlere Helligkeitsänderung je Zeile, dann je Spalte abziehen.
+function camOffsets(a,b){
+  const {W,H}=CAM,m=CAM.mask,A=a.g,B=b.g,row=new Float32Array(H),col=new Float32Array(W);
+  for(let y=0;y<H;y++){let s=0,n=0;for(let x=0,i=y*W;x<W;x++,i++){if(m[i]){s+=A[i]-B[i];n++}}row[y]=n>8?s/n:0}
+  const cs=new Float32Array(W),cn=new Uint16Array(W);
+  for(let y=0;y<H;y++)for(let x=0,i=y*W;x<W;x++,i++){if(m[i]){cs[x]+=A[i]-B[i]-row[y];cn[x]++}}
+  for(let x=0;x<W;x++)col[x]=cn[x]>8?cs[x]/cn[x]:0;
+  return {row,col};
+}
 function camDiff(a,b,T,out,only){
-  const m=CAM.mask,A=a.c,B=b.c,off=camOffset(a,b);let n=0;
+  const {W}=CAM,m=CAM.mask,A=a.c,B=b.c,{row,col}=camOffsets(a,b);let n=0;
   for(let i=0,k=0;i<m.length;i++,k+=3){if(!m[i]||(only&&!only[i])){if(out)out[i]=0;continue}
-    const d=Math.max(Math.abs(A[k]-B[k]-off),Math.abs(A[k+1]-B[k+1]-off),Math.abs(A[k+2]-B[k+2]-off)),on=d>T;if(out)out[i]=on?1:0;if(on)n++}
+    const off=row[(i/W)|0]+col[i%W],d=Math.max(Math.abs(A[k]-B[k]-off),Math.abs(A[k+1]-B[k+1]-off),Math.abs(A[k+2]-B[k+2]-off)),on=d>T;if(out)out[i]=on?1:0;if(on)n++}
   return n;
 }
-function camMotion(a,b){const m=CAM.mask,A=a.g,B=b.g,off=camOffset(a,b);let s=0,n=0;for(let i=0;i<A.length;i+=2){if(m[i]){s+=Math.abs(A[i]-B[i]-off);n++}}return n?s/n:0}
+// Bewegung = Anteil der Pixel, die sich deutlich verändert haben (nach Flimmer-Ausgleich)
+function camMotion(a,b){
+  const {W}=CAM,m=CAM.mask,A=a.g,B=b.g,{row,col}=camOffsets(a,b);let c=0,n=0;
+  for(let i=0;i<A.length;i+=2){if(m[i]){n++;if(Math.abs(A[i]-B[i]-row[(i/W)|0]-col[i%W])>24)c++}}
+  return n?c/n*100:0;
+}
 // Größter zusammenhängender Fleck, dann Hauptachse; das schmalere Ende ist die Spitze
 const NB=[];for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)if(dx||dy)NB.push([dx,dy]);
 function camFindTip(bits){
@@ -1040,7 +1055,8 @@ function camTick(){
   const g=camGray(),now=performance.now(),T=CAM.T;
   if(!CAM.prev){CAM.prev=g;CAM.lastMotion=now;return}
   const mot=camMotion(g,CAM.prev),prev=CAM.prev;CAM.prev=g;
-  if(mot>6){CAM.lastMotion=now;CAM.cand=null;camSetStatus('Bewegung …');return}
+  CAM.mot=mot;camDebug();
+  if(mot>1.2){CAM.lastMotion=now;CAM.cand=null;camSetStatus('Bewegung …');return}
   if(now-CAM.lastMotion<380)return;
   // Bildrauschen messen und die Schwelle anpassen (ruhiges Bild gegen das vorige)
   const noise=camDiff(g,prev,T);
@@ -1052,7 +1068,8 @@ function camTick(){
     CAM.cand=null;
     // Leere Scheibe langsam nachführen, damit Lichtänderungen nicht stören
     if(CAM.count===0&&now-(CAM.emptyT||0)>3000){CAM.empty=g;CAM.ref=g;CAM.emptyT=now}
-    camSetStatus(CAM.count>=3?'Darts ziehen':'Bereit, wirf!');return;
+    const gm=S.game,missing=gm&&!gm.done&&CAM.count===0&&gm.turn.length>0&&!isBot(gm,gm.cur);
+    camSetStatus(camPulling()?'Darts ziehen':missing?'Fehlende Darts im Bild antippen, weiterwerfen oder Weiter':'Bereit, wirf!');return;
   }
   // Darts gezogen? Dort, wo Darts steckten, sieht es wieder aus wie die leere Scheibe.
   if(CAM.count>0&&CAM.dartMask){
@@ -1078,19 +1095,20 @@ function camTick(){
   CAM.last={x:tip.x,y:tip.y,t:now};
   camDart(bx,by);
 }
+const camPulling=()=>!!(S.disp&&S.disp.pull&&dispOn());
 function camDart(bx,by){
   const g=S.game;
-  if(CAM.count>=3){camSetStatus('Darts ziehen');return}
   CAM.count++;
-  if(!g||g.done||g.pause||S.sheet||isBot(g,g.cur))return;
+  // Während auf das Ziehen gewartet wird oder ein Bot dran ist, zählt kein Wurf
+  if(!g||g.done||g.pause||S.sheet||isBot(g,g.cur)||camPulling()){camSetStatus('Darts ziehen');return}
   throwDart({...hitAt(bx,by),x:+bx.toFixed(1),y:+by.toFixed(1),cam:1});
-  camSetStatus(CAM.count>=3?'Darts ziehen':'Bereit, wirf!');
+  camSetStatus(camPulling()?'Darts ziehen':'Bereit, wirf!');
 }
 function camRemoved(g){
   CAM.ref=g;CAM.empty=g;CAM.emptyT=performance.now();CAM.dartMask=null;const had=CAM.count;CAM.count=0;camSetStatus('Bereit, wirf!');
   const gm=S.game;if(!gm||gm.done||gm.pause||S.sheet)return;
-  if(gm.turn.length&&!isBot(gm,gm.cur)) endTurnEarly();
-  else if(had&&dispOn()){S.disp=null;render()}
+  if(camPulling()||(had&&dispOn())){S.disp=null;render();return}
+  if(gm.turn.length&&!isBot(gm,gm.cur)){camSetStatus('Fehlende Darts im Bild antippen oder Weiter');render()}
 }
 function camDrawOverlay(){
   const ov=CAM.ov,v=CAM.video;if(!ov||!v.videoWidth)return;
@@ -1122,7 +1140,7 @@ function camEnsureEl(){
   el.innerHTML=`<div class="camhead"><b>Gerät ausrichten</b><button class="camdone" data-act="calibdone">Fertig</button></div>
     <div class="camstage"><video playsinline muted autoplay></video><canvas class="camov"></canvas><canvas class="camloupe" width="240" height="240" hidden></canvas>
       <input class="camzoom" type="range" min="1" max="3" step="0.1" value="1" aria-label="Zoom" hidden>
-      <div class="campill">Kamera startet …</div>
+      <div class="campill">Kamera startet …</div><div class="camdbg"></div>
       <button class="camalign" data-act="calib">Ausrichten</button></div>
     <div class="camtips"><p class="camstep"></p><div class="row"><button class="btn2" data-act="calibundo">Letzten Punkt zurück</button><button class="btn2" data-act="calibreset">Alle neu setzen</button></div>
       <h3>Tipps für bessere Genauigkeit</h3>
@@ -1134,19 +1152,24 @@ function camEnsureEl(){
   zoom.addEventListener('input',()=>{const tr=CAM.stream&&CAM.stream.getVideoTracks()[0];CAM.zoom=+zoom.value;try{tr.applyConstraints({advanced:[{zoom:CAM.zoom}]})}catch(e){}});
   const pos=e=>{const r=camRect();return [(e.clientX-r.x)/r.w,(e.clientY-r.y)/r.h]};
   CAM.ov.addEventListener('pointerdown',e=>{
-    if(!CAM.calibrating)return;
+    if(!CAM.calibrating){
+      const g=S.game;if(!CAM.Hib||!g||g.done||g.pause||S.sheet||isBot(g,g.cur))return;
+      CAM.tap=pos(e);try{CAM.ov.setPointerCapture(e.pointerId)}catch(_){}camLoupe(CAM.tap,true);e.preventDefault();return;
+    }
     const [u,v]=pos(e),r=camRect();
     const hit=CAM.pts.findIndex(([a,b])=>Math.hypot((a-u)*r.w,(b-v)*r.h)<26);
     if(hit>=0)CAM.drag=hit;else if(CAM.pts.length<4){CAM.pts.push([u,v]);CAM.drag=CAM.pts.length-1}
     try{CAM.ov.setPointerCapture(e.pointerId)}catch(_){}if(CAM.drag>=0)camLoupe(CAM.pts[CAM.drag]);camCalibText();e.preventDefault();
   });
-  CAM.ov.addEventListener('pointermove',e=>{if(CAM.calibrating&&CAM.drag>=0){CAM.pts[CAM.drag]=pos(e);camLoupe(CAM.pts[CAM.drag])}});
-  CAM.ov.addEventListener('pointerup',()=>{CAM.drag=-1;camLoupe(null);camCalibText()});
-  CAM.ov.addEventListener('pointercancel',()=>{CAM.drag=-1;camLoupe(null)});
+  CAM.ov.addEventListener('pointermove',e=>{if(CAM.calibrating&&CAM.drag>=0){CAM.pts[CAM.drag]=pos(e);camLoupe(CAM.pts[CAM.drag])}else if(CAM.tap){CAM.tap=pos(e);camLoupe(CAM.tap,true)}});
+  CAM.ov.addEventListener('pointerup',()=>{
+    if(CAM.tap){const [u,v]=CAM.tap;CAM.tap=null;camLoupe(null);const [bx,by]=hApply(CAM.Hib,u*CAM.W,v*CAM.H);throwDart({...hitAt(bx,by),x:+bx.toFixed(1),y:+by.toFixed(1)});return}
+    CAM.drag=-1;camLoupe(null);camCalibText()});
+  CAM.ov.addEventListener('pointercancel',()=>{CAM.drag=-1;CAM.tap=null;camLoupe(null)});
   return el;
 }
 // Lupe beim Setzen eines Punkts: 4-fach vergrößerter Ausschnitt mit Fadenkreuz über dem Finger
-function camLoupe(p){
+function camLoupe(p,label){
   const lp=CAM.el&&CAM.el.querySelector('.camloupe');if(!lp)return;
   if(!p){lp.hidden=true;return}
   const v=CAM.video,r=camRect(),box=r.box,S2=120,Z=4,vw=v.videoWidth,vh=v.videoHeight;
@@ -1156,6 +1179,7 @@ function camLoupe(p){
   try{c.drawImage(v,p[0]*vw-sw/2,p[1]*vh-sh/2,sw,sh,0,0,240,240)}catch(e){}
   c.restore();c.strokeStyle='#7fe0ff';c.lineWidth=3;c.beginPath();c.arc(120,120,117,0,7);c.stroke();
   c.strokeStyle='#ff3b5c';c.lineWidth=2;c.beginPath();c.moveTo(120,88);c.lineTo(120,112);c.moveTo(120,128);c.lineTo(120,152);c.moveTo(88,120);c.lineTo(112,120);c.moveTo(128,120);c.lineTo(152,120);c.stroke();
+  if(label&&CAM.Hib){const [bx,by]=hApply(CAM.Hib,p[0]*CAM.W,p[1]*CAM.H);const t=lab(hitAt(bx,by));c.font='700 30px Oxanium,sans-serif';c.textAlign='center';c.textBaseline='middle';c.fillStyle='rgba(0,0,0,.7)';c.fillRect(70,190,100,38);c.fillStyle='#ffd54a';c.fillText(t,120,210)}
   const x=r.x-box.left+p[0]*r.w,y=r.y-box.top+p[1]*r.h;
   lp.style.left=Math.max(4,Math.min(box.width-124,x-60))+'px';lp.style.top=(y-150>4?y-150:y+30)+'px';lp.hidden=false;
 }
@@ -1393,12 +1417,12 @@ function gameView(){
   h+=heroView(g,p,disp)+othersView(g,p);
   if(g.mode==='cricket') h+=cricketView(g);
   h+=`<div class="turn ${disp&&S.disp.bust?'bust':''}"><div class="slots">${[0,1,2].map(i=>{const d=turn[i];return `<div class="slot ${d?'f':''} ${!disp&&i===turn.length?'nx':''}" style="color:${d?'#fff':pcol(g,p)}">${d?lab(d).replace(/^([TD])(\d)/,'$1 $2'):DART_ICON}</div>`}).join('')}</div><div class="ttl">${turn.length?tt:'0'}</div></div>`;
-  const hint=disp?`Aufnahme ${esc(g.players[p])}: <b>${esc(S.disp.txt||String(tt))}</b>`:M.hint(g,p);
+  const hint=disp?(S.disp.pull?`<b>Darts ziehen</b> · danach geht es weiter (oder Weiter tippen)`:`Aufnahme ${esc(g.players[p])}: <b>${esc(S.disp.txt||String(tt))}</b>`):M.hint(g,p);
   h+=`<div class="hint">${!disp&&g.players.length>1?`<span style="color:${pcol(g,p)}">●</span> ${esc(g.players[p])} ist dran${hint?' · ':''}`:''}${hint}</div>`;
   h+=`<div class="input" id="inputArea"></div>`;
   h+=`<div class="gact"><button class="ib" data-act="toggleInput" aria-label="${S.input==='board'?'Tastatur zeigen':'Scheibe zeigen'}">${S.input==='board'?I.keys:I.board}</button><button class="ib cam ${S.input==='cam'?'on':''}" data-act="camtoggle" aria-label="Kamera ${S.input==='cam'?'aus':'an'}" aria-pressed="${S.input==='cam'}">${I.cam}</button><button class="ib" data-act="undo" aria-label="Rückgängig" ${canUndo?'':'disabled'}>${I.undo}</button><button class="go" data-act="weiter" ${bot&&!disp?'disabled':''}>Weiter</button></div>`;
   clearTimeout(dispT);
-  if(disp) dispT=setTimeout(()=>{S.disp=null;render()},S.disp.until-Date.now()+20);
+  if(disp&&isFinite(S.disp.until)) dispT=setTimeout(()=>{S.disp=null;render()},S.disp.until-Date.now()+20);
   return h+'</div>';
 }
 let boardEl=null,boardSkin='';
@@ -1493,7 +1517,7 @@ function sheetView(){
     const alts=checkoutAlts(o.rem,o.left,o.out),outName={double:'Double Out',master:'Master Out',straight:'Straight Out'}[o.out];
     return `<div class="sheet" data-act="closesheet"><div class="box" data-stop><h2>Wege für ${o.rem}</h2><p>${o.left} ${o.left===1?'Dart':'Darts'} übrig · ${outName}. Oben steht der empfohlene Weg.</p><div class="outs">${alts.map(r=>`<div><b>${r.map(lab).join(' · ')}</b><span>${r.length} ${r.length===1?'Dart':'Darts'}</span></div>`).join('')}</div><button class="btn2" data-act="closesheet">Schließen</button></div></div>`;
   }
-  if(S.sheet==='menu') return `<div class="sheet" data-act="closesheet"><div class="box" data-stop><h2>Spiel pausiert</h2><p>Der Spielstand bleibt gespeichert, bis du ein neues Spiel startest.</p>${prefToggles()}<button class="btn2" data-act="closesheet">Weiterspielen</button><button class="btn2" data-act="home">Zum Startbildschirm</button><button class="btn2 warn" data-act="${S.confirmAbandon?'abandon':'askabandon'}">${S.confirmAbandon?'Wirklich abbrechen? Das Spiel wird nicht gespeichert':'Spiel abbrechen'}</button></div></div>`;
+  if(S.sheet==='menu') return `<div class="sheet" data-act="closesheet"><div class="box" data-stop><h2>Spiel pausiert</h2><p>Der Spielstand bleibt gespeichert, bis du ein neues Spiel startest.</p><button class="btn2" data-act="camcalib">Kamera ausrichten</button>${prefToggles()}<button class="btn2" data-act="closesheet">Weiterspielen</button><button class="btn2" data-act="home">Zum Startbildschirm</button><button class="btn2 warn" data-act="${S.confirmAbandon?'abandon':'askabandon'}">${S.confirmAbandon?'Wirklich abbrechen? Das Spiel wird nicht gespeichert':'Spiel abbrechen'}</button></div></div>`;
   if(S.sheet==='leg'){const w=g.pause.winner;return `<div class="sheet"><div class="box"><h2>${esc(g.players[w])} gewinnt Leg ${g.leg+1}</h2><p>Stand ${g.legsWon.join(' : ')} · First to ${g.legsToWin}</p><div class="row"><button class="btn2" data-act="undo">Zurück</button><button class="cta" data-act="nextleg">Nächstes Leg</button></div></div></div>`}
   if(S.sheet==='result'){
     const multi=g.players.length>1,M=MODES[g.mode];
@@ -1529,12 +1553,13 @@ const ACT={
   skin:d=>{P.skin=d.v;savePrefs();applySkin();render()},
   voicetest:()=>{const pv=P.voice;P.voice=true;say('Hundertvierzig. Rest: einhunderteinundsechzig');P.voice=pv},
   weiter:()=>{if(S.input==='cam')camResync();if(dispOn()){S.disp=null;render()}else endTurnEarly()},
+  camcalib:()=>{S.sheet=null;if(S.input!=='cam'){S.input='cam';store.set('input','cam')}render();const t=setInterval(()=>{if(CAM.stream&&CAM.video&&CAM.video.videoWidth){clearInterval(t);camOpenCalib()}},150);setTimeout(()=>clearInterval(t),10000)},
   pref:d=>{P[d.k]=!P[d.k];savePrefs();if(d.k==='sound'&&P.sound){ac();tone(880,0,.12,'sine',.1)}if(d.k==='voice'){if(P.voice)say('Ansage an');else try{speechSynthesis.cancel()}catch(e){}}render()},
   closesheet:()=>{S.sheet=null;render()},
   home:()=>leaveGame(false),
   askabandon:()=>{S.confirmAbandon=true;render()},
   abandon:()=>leaveGame(true),
-  undo:()=>{if(S.input==='cam'&&CAM.count>0)CAM.count--;undo()},
+  undo:()=>undo(),
   endturn:()=>endTurnEarly(),
   toggleInput:()=>{if(S.input==='cam')camStop();S.input=S.input==='board'?'keys':'board';store.set('input',S.input);render()},
   camtoggle:()=>{if(S.input==='cam'){camStop();S.input='board'}else{S.input='cam';CAM.count=0;CAM.ref=CAM.empty=CAM.prev=null}store.set('input',S.input);render()},
